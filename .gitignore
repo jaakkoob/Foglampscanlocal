@@ -1,13 +1,8 @@
-# foglamp's fetched renderer page + your built page — never commit (not ours to redistribute; holds your data)
 .shell.html
 .viewer.html
 .serve.log
-
-# your real scan (keep private); the generic example-scan.json IS committed
 scan.json
 *-scan.json
-!example-scan.json
-
 __pycache__/
 *.pyc
 .DS_Store

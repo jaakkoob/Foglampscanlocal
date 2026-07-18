@@ -1,60 +1,98 @@
 # foglamp-local
 
-**View a [foglamp](https://foglamp.dev) codebase-scan with foglamp's real renderer — 100% on your machine. Your architecture never leaves your computer.**
+View a [foglamp](https://foglamp.dev) codebase scan with foglamp's real renderer, entirely on localhost — your scan data is embedded into a locally-served page and never uploaded; the only network egress is GETs for foglamp's public `/_next` renderer assets (everything else — `/api` favicons, analytics, RSC prefetch, all POSTs — is blocked and logged to `.serve.log`).
+Run `python3 foglamp-local.py` for an onboarding page with a copy-paste prompt, or paste the prompt below into an AI coding agent in your repo, then `python3 foglamp-local.py run scan.json`.
 
-foglamp draws a beautiful map of how a codebase works and how it uses AI. Normally you upload a small JSON summary to `foglamp.dev` and get a public link. **foglamp-local** lets you keep that JSON entirely local: it reuses foglamp's public renderer (loaded from their CDN) but embeds *your* data into a page served only from `localhost`, so nothing about your architecture is ever sent anywhere.
-
-Great for private codebases, client work, or anyone who wants the map without the upload.
-
-```
-python3 foglamp-local.py run                 # see the built-in example
-python3 foglamp-local.py run my-scan.json    # view your own scan
-```
-→ opens `http://localhost:8788/`. That's it. No install, no dependencies (Python 3 stdlib only).
-
----
-
-## How it works (and why it's private)
+## Scan prompt
 
 ```
-your browser ──GET──▶ foglamp-local proxy (:8788, allow-list)
-                         ├─ serves the built page (your scan JSON inline)  ── never uploaded
-                         └─ forwards ONLY /_next/* asset GETs ──▶ foglamp CDN (public JS/CSS/fonts)
-                            blocks  /api/* (favicons), /_vercel/* (analytics), ?_rsc, and ALL POSTs
+Analyze THIS repository and write a foglamp "codebase scan" to scan.json — a map of how the
+codebase works and how it uses AI. Produce ONLY the JSON below. Nothing is uploaded — a local
+tool renders it on localhost, so your architecture never leaves your machine.
+
+## Steps
+1. Investigate the repo and build the JSON below. Write it to scan.json.
+2. Then run:  python3 foglamp-local.py run scan.json   → opens http://localhost:8788/ with
+   foglamp's real renderer, fully local.
+
+## How to investigate
+- Find where AI runs: generateText / streamText / generateObject / streamObject,
+  @ai-sdk/* providers, agent loops, tool definitions (tool({...})).
+- Identify the models and their provider (OpenAI, Anthropic, Google, …).
+- Identify tools models can call (Exa, Firecrawl, Parallel, DB queries, internal
+  functions) and external integrations/services.
+- Map the business logic too: the internal services/pipelines the product is
+  built from (billing, ingestion, background workers, domain services) — these
+  become "service" nodes, and the interesting sentence goes on the edge
+  (e.g. "charges Stripe on trial end").
+- Map the main flows: entry points (routes, webhooks, pages, CLIs), scheduled jobs
+  (crons/queues/workers), the agents, the models/tools they use, and the
+  datastores/services they read and write.
+
+## Output contract — write EXACTLY this shape to scan.json
+{
+  "version": 1,
+  "project": {
+    "name": "string (<=48)",
+    "slug": "lowercase-dashed (<=48)",
+    "tagline": "one line (<=80, optional)",
+    "iconDomain": "favicon domain for the project, e.g. acme.com (optional)",
+    "date": "YYYY-MM-DD"
+  },
+  "stats": { "agents": 0, "models": 0, "tools": 0, "integrations": 0 },
+  "topModels":       [ { "id": "gpt-4o", "label": "GPT-4o", "domain": "openai.com" } ],
+  "topTools":        [ { "id": "exa", "label": "Exa", "domain": "exa.ai" } ],
+  "topIntegrations": [ { "id": "stripe", "label": "Stripe", "domain": "stripe.com" } ],
+  "graph": {
+    "nodes": [
+      { "id": "chat", "label": "Dashboard chat", "kind": "entry", "sub": "/api/chat" },
+      { "id": "agent", "label": "Support agent", "kind": "agent", "sub": "streamText",
+        "sourceRef": "src/agents/support.ts:42",
+        "detail": "Answers tickets with order lookups (<=200, optional)" },
+      { "id": "gpt4o", "label": "GPT-4o", "kind": "model", "domain": "openai.com" },
+      { "id": "billing", "label": "Billing service", "kind": "service",
+        "sourceRef": "src/services/billing.ts" },
+      { "id": "pg", "label": "Postgres", "kind": "store", "domain": "postgresql.org" }
+    ],
+    "edges": [
+      { "from": "chat", "to": "agent", "kind": "triggers" },
+      { "from": "agent", "to": "gpt4o", "kind": "calls" },
+      { "from": "billing", "to": "pg", "kind": "writes", "label": "charges on trial end" }
+    ]
+  }
+}
+
+## Rules (these keep every scan consistent — do not break them)
+- Caps: topModels <= 3, topTools <= 10, topIntegrations <= 10, graph.nodes <= 60,
+  graph.edges <= 120. One map holds everything — AI flows AND business logic.
+  Big maps are welcome (the viewer pans); aim for 20-40 nodes on a substantial
+  codebase. Rich, not sparse — but every node must earn its place.
+- Give every distinct agent its OWN node when there are <= 10 agents; only
+  merge agents into one node when they are numerous and near-identical (then
+  say so in sub, e.g. "12 near-identical scrapers"). Chain agents with
+  agent->agent edges when one feeds the next.
+- group (optional, <=24): tag related nodes with a shared group name — those
+  nodes render as one labeled vertical stack. Group by feature/domain the way a
+  team would say it ("Billing", "Ingestion", "Setup pipeline"), not by file
+  layout. Use 2-3 groups of 3-6 nodes; leave hub-and-spoke nodes ungrouped.
+- Node labels <= 28 chars, sub <= 40, edge labels <= 24.
+- kind is one of: entry (trigger/route/page/CLI), cron (scheduled job), agent,
+  model, tool, service (internal business-logic module/pipeline the project
+  owns), store (DB/cache/index), external (3rd-party API).
+- Edge kind (optional): "calls" | "reads" | "writes" | "triggers" — what the
+  connection does. Prefer setting it; it's shown quietly (revealed when a flow
+  is traced). Add a label only when a specific phrase says more (e.g. "charges
+  on trial end" — put the business logic on edges); labels are always visible.
+- domain is a favicon domain with no scheme (openai.com, anthropic.com, exa.ai,
+  clickhouse.com). Add it to anything a recognizable company/product owns; omit it
+  for purely internal nodes (entries, crons, services, internal tools). Use the
+  product domain for models (gemini.google.com for Gemini, claude.ai for Claude).
+- detail (optional, <=200) is shown when a node is clicked — one sentence of
+  what it does. sourceRef (optional, <=120) is the repo path (plus :line) where
+  the node lives, e.g. "src/agents/support.ts:42" — add it to internal nodes so
+  teammates can jump to code.
+- Every edge's from/to must reference an existing node id; ids unique.
+- Use today's date for project.date.
 ```
 
-- **`build`** fetches foglamp's server-rendered `/scan/<slug>` page once (the empty renderer "shell"), then swaps *your* scan JSON into its data payload and injects a client-side privacy guard. Output: a self-contained local HTML page.
-- **`serve`** runs a tiny stdlib proxy on `:8788`. It serves that page at foglamp's original route path (so the Next.js renderer hydrates correctly) and **reverse-proxies only static `/_next` assets** to foglamp. Everything else is blocked and written to `.serve.log`, so the privacy claim is auditable.
-
-The only network egress is GETs for foglamp's public renderer bundle — identical for every visitor, carrying **zero** of your data. Favicons render blank by design (fetching them would reveal your service domains).
-
-## Get a scan of your codebase
-
-`scan.json` follows foglamp's schema (models, tools, integrations, and the flow graph). The easiest way to produce one is to hand [`PROMPT.md`](PROMPT.md) to an AI coding agent (Claude Code, Cursor, etc.) pointed at your repo — it investigates the code and writes `scan.json`. Then:
-
-```
-python3 foglamp-local.py run scan.json
-```
-
-See [`example-scan.json`](example-scan.json) for the exact shape (it happens to map *this tool itself*).
-
-## Commands
-
-| command | what it does |
-|---|---|
-| `run [scan.json]` | fetch shell (once) + build + serve (default) |
-| `build [scan.json]` | rebuild the local page from a scan file |
-| `serve` | serve the last build |
-| `fetch` | (re)download foglamp's renderer shell |
-
-Env: `FOGLAMP_SHELL_URL` (any live `foglamp.dev/scan/<slug>` page to use as the shell — swap it if the default 404s), `PORT` (default `8788`).
-
-## Notes & honesty
-
-- **Not affiliated with foglamp.** This is an unofficial community tool that reuses foglamp's *public* renderer to view scans locally. It does **not** redistribute foglamp's code — the shell and renderer assets are fetched from `foglamp.dev` at runtime (and are gitignored, never committed). Please respect foglamp's terms of service.
-- foglamp *can* see that your IP fetched their public asset files (unavoidable when reusing their renderer). Those requests contain none of your architecture. If you want zero contact with foglamp, you'd need a from-scratch renderer instead.
-- The scan JSON is a high-level summary you author — no source code or secrets.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+Released under The Unlicense — public domain.
