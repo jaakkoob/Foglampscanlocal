@@ -1,5 +1,11 @@
 # foglamp-local
 
+Run with
+```
+python3 foglamp-local.py run scan.json
+```
+
+
 View a [foglamp](https://foglamp.dev) codebase scan with foglamp's real renderer, entirely on localhost — your scan data is embedded into a locally-served page and never uploaded; the only network egress is GETs for foglamp's public `/_next` renderer assets (everything else — `/api` favicons, analytics, RSC prefetch, all POSTs — is blocked and logged to `.serve.log`).
 Run `python3 foglamp-local.py` for an onboarding page with a copy-paste prompt, or paste the prompt below into an AI coding agent in your repo, then `python3 foglamp-local.py run scan.json`.
 
